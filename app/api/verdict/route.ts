@@ -11,10 +11,34 @@ type JsonObject = Record<string, unknown>
 function parseJsonObject(rawContent: string): JsonObject {
   const cleaned = rawContent.replace(/```json|```/gi, "").trim()
   const start = cleaned.indexOf("{")
-  const end = cleaned.lastIndexOf("}")
-  if (start < 0 || end <= start) throw new Error("No JSON object")
-  const objectText = cleaned.slice(start, end + 1).replace(/,\s*([}\]])/g, "$1")
-  return JSON.parse(objectText) as JsonObject
+  if (start < 0) throw new Error("No JSON object")
+
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let index = start; index < cleaned.length; index += 1) {
+    const char = cleaned[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') {
+      inString = true
+      continue
+    }
+    if (char === "{") depth += 1
+    if (char === "}") {
+      depth -= 1
+      if (depth === 0) {
+        const objectText = cleaned.slice(start, index + 1).replace(/,\s*([}\]])/g, "$1")
+        return JSON.parse(objectText) as JsonObject
+      }
+      if (depth < 0) throw new Error("Unexpected closing brace")
+    }
+  }
+  throw new Error("Incomplete JSON object")
 }
 
 function toText(value: unknown): string {
@@ -131,7 +155,7 @@ export async function POST(req: Request) {
 你的目标不是评价用户是否勇敢，而是把对质结果变成一份低成本、可验证、有停止线的行动方案。
 只能把证词中存在的经历当事实；可以清楚标注推理。不得虚构用户已经做过的验证。
 方案必须适合一个普通个人在七天内、用很低的成本完成。不要把需要团队、大额投放或上千样本才能做的事情写成最小实验。
-输出必须是 JSON，不要 markdown，不要多余解释：
+输出必须且只能是一个完整 JSON 对象，不要 markdown，不要多余解释，不要重复闭合最外层花括号：
 {
   "verdict": "短而明确的裁决标题；二选一应指出当前优先验证哪个选项，事前验尸应指出首要死因",
   "summary": "80 字以内，概括哪些证据支持、哪些证据仍缺失",
@@ -180,41 +204,47 @@ export async function POST(req: Request) {
 
     const data = await response.json()
     const raw = String(data.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim()
-    try {
-      const parsed = parseJsonObject(raw)
-      const modelAction = toText(parsed.action)
-      const modelMetric = toText(parsed.successMetric)
-      const parsedConditions = Array.isArray(parsed.conditions) ? parsed.conditions.map(toText).filter((item) => item.length > 5).slice(0, 3) : []
-      const parsedSteps: ExperimentStep[] = Array.isArray(parsed.experimentSteps) ? parsed.experimentSteps.slice(0, 3).map((item: unknown) => {
-        const step = item && typeof item === "object" ? item as Record<string, unknown> : {}
-        return { title: toText(step.title), detail: toText(step.detail), metric: toText(step.metric) }
-      }) : []
-      const placeholders = ["步骤名", "具体怎么做", "本步留下什么证据"]
-      const irreversibleStep = parsedSteps.some((step) => /加入团队|开始实际工作|辞职|休学|全职|投入全部/.test(`${step.title}${step.detail}`))
-      const validSteps = !irreversibleStep && parsedSteps.length === 3 && parsedSteps.every((step) =>
-        step.title.length > 1 && step.detail.length > 8 && step.metric.length > 4 &&
-        !placeholders.includes(step.title) && !placeholders.includes(step.detail) && !placeholders.includes(step.metric)
-      )
-      const sampleSizes = [...modelAction.matchAll(/(\d+)\s*(?:位|名|个|人|用户|访客)/g)].map((match) => Number(match[1]))
-      const validAction = modelAction.length > 20 && /\d+\s*(天|位|名|个|次|页|条|元|%|小时|周)/.test(modelAction) && sampleSizes.every((size) => size <= 20)
-      const validMetric = modelMetric.length > 8 && /\d/.test(modelMetric)
-      const usedFallback = !validAction || !validMetric || !validSteps || parsedConditions.length < 3
-      return Response.json({
-        verdict: toText(parsed.verdict) || fallback.verdict,
-        summary: toText(parsed.summary) || fallback.summary,
-        deathCause: toText(parsed.deathCause) || fallback.deathCause,
-        action: validAction ? modelAction : fallback.action,
-        successMetric: validMetric ? modelMetric : fallback.successMetric,
-        stopCondition: toText(parsed.stopCondition) || fallback.stopCondition,
-        reviewDate: fallback.reviewDate,
-        conditions: parsedConditions.length === 3 ? parsedConditions : fallback.conditions,
-        experimentSteps: validSteps ? parsedSteps : fallback.experimentSteps,
-        dissent: toText(parsed.dissent) || fallback.dissent,
-        warning: usedFallback ? "部分模型内容未通过可执行性检查，已用本案专属行动方案补齐。" : undefined,
-      })
-    } catch {
-      return Response.json({ ...fallback, warning: "模型返回格式异常，已使用结构化行动模板完成裁决。" })
+    if (!raw) {
+      return Response.json({ ...fallback, warning: "模型本次未返回裁决内容，已使用本案专属行动模板。" })
     }
+    let parsed: JsonObject
+    try {
+      parsed = parseJsonObject(raw)
+    } catch (error) {
+      console.warn("[verdict] JSON parse failed:", error instanceof Error ? error.message : String(error))
+      return Response.json({ ...fallback, warning: "模型裁决未通过 JSON 格式校验，已使用本案专属行动模板。" })
+    }
+    const rawAction = toText(parsed.action)
+    const oversizedSample = rawAction.match(/(\d{3,})\s*(位|名|个|人|用户|访客)/)
+    const modelAction = oversizedSample
+      ? rawAction.replace(oversizedSample[0], `20 ${oversizedSample[2]}`)
+      : rawAction
+    const modelMetric = toText(parsed.successMetric)
+    const parsedConditions = Array.isArray(parsed.conditions) ? parsed.conditions.map(toText).filter((item) => item.length > 5).slice(0, 3) : []
+    const parsedSteps: ExperimentStep[] = Array.isArray(parsed.experimentSteps) ? parsed.experimentSteps.slice(0, 3).map((item: unknown) => {
+      const step = item && typeof item === "object" ? item as Record<string, unknown> : {}
+      return { title: toText(step.title), detail: toText(step.detail), metric: toText(step.metric) }
+    }) : []
+    const placeholders = ["步骤名", "具体怎么做", "本步留下什么证据"]
+    const irreversibleStep = parsedSteps.some((step) => /加入(初创)?团队|开始实际工作|办理辞职|提交辞呈|办理休学|全职投入|投入全部(积蓄|存款|资金)/.test(`${step.title}${step.detail}`))
+    const validSteps = !irreversibleStep && parsedSteps.length === 3 && parsedSteps.every((step) =>
+      step.title.length > 1 && step.detail.length > 8 && step.metric.length > 4 &&
+      !placeholders.includes(step.title) && !placeholders.includes(step.detail) && !placeholders.includes(step.metric)
+    )
+    const validAction = modelAction.length > 20 && /\d+\s*(天|位|名|个|次|页|条|元|%|小时|周)/.test(modelAction)
+    const validMetric = modelMetric.length > 8 && /\d/.test(modelMetric)
+    return Response.json({
+      verdict: toText(parsed.verdict) || fallback.verdict,
+      summary: toText(parsed.summary) || fallback.summary,
+      deathCause: toText(parsed.deathCause) || fallback.deathCause,
+      action: validAction ? modelAction : fallback.action,
+      successMetric: validMetric ? modelMetric : fallback.successMetric,
+      stopCondition: toText(parsed.stopCondition) || fallback.stopCondition,
+      reviewDate: fallback.reviewDate,
+      conditions: parsedConditions.length === 3 ? parsedConditions : fallback.conditions,
+      experimentSteps: validSteps ? parsedSteps : fallback.experimentSteps,
+      dissent: toText(parsed.dissent) || fallback.dissent,
+    })
   } catch {
     return Response.json({ ...fallbackVerdict(caseFile, insights), warning: "裁决服务暂时异常，已保留完整行动模板。" })
   }

@@ -29,9 +29,22 @@ type Message = {
   who?: string
   witnessIndex?: number
   note?: boolean
+  coverage?: "direct" | "partial"
 }
 type Insight = { text: string; witness: string; round: number }
 type Strategy = "证据追问" | "适用性异议" | "行动追问"
+type DebateData = {
+  reply?: string
+  takeaway?: string
+  coverage?: "direct" | "partial" | "none"
+  warning?: string
+}
+type WitnessResult = {
+  witness: Witness
+  witnessIndex: number
+  data?: DebateData
+  error?: string
+}
 
 const MODE_NAMES: Record<Mode, string> = { single: "单案对质", compare: "二选一", premortem: "事前验尸" }
 const STRATEGIES: Strategy[] = ["证据追问", "适用性异议", "行动追问"]
@@ -67,7 +80,6 @@ export default function JuryPage() {
   const [witnesses, setWitnesses] = useState<Witness[]>([])
   const [insights, setInsights] = useState<Insight[]>([])
   const [activeWitness, setActiveWitness] = useState(0)
-  const [questioningWitness, setQuestioningWitness] = useState(0)
   const [asked, setAsked] = useState(0)
   const [input, setInput] = useState("")
   const [strategy, setStrategy] = useState<Strategy>("证据追问")
@@ -133,7 +145,7 @@ export default function JuryPage() {
           ? "A、B 两个选项都已入卷。别急着选边，先问清每段经历支持什么、又在什么条件下会反转。"
           : currentCase.mode === "premortem"
             ? "现在假设这个决定已经失败。我们不安慰当事人，只找死因、早期信号和还能补救的动作。"
-            : "三位证人已经到席。每回合选择一种质询策略；不知道怎么问，就点我推荐的问题。"
+            : "三位证人已经到席。每个问题都会同题交给所有证人，只把相关回答整理入卷；不知道怎么问，就点我推荐的问题。"
         setMessages([{ role: "guide", text: opening }])
       })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "网络错误，请重试"))
@@ -161,41 +173,88 @@ export default function JuryPage() {
   const sendQuestion = async (question: string, method: Strategy = strategy) => {
     const text = question.trim()
     if (!text || !witnesses.length || isTyping || isGenerating) return
-    const witnessIndex = activeWitness
-    const currentWitness = witnesses[witnessIndex]
-    setQuestioningWitness(witnessIndex)
+    const nextAsked = asked + 1
     setInput("")
     setError("")
     setMessages((previous) => [...previous, { role: "user", text: `【${method}】${text}` }])
     setIsTyping(true)
 
     try {
-      const response = await fetch("/api/debate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          witness: currentWitness,
-          userMessage: text,
-          history: messages.slice(-6),
-          caseFile,
-          strategy: method,
-          round: Math.min(asked + 1, 3),
-        }),
-      })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || data.error || "对质暂时失败")
+      const results: WitnessResult[] = await Promise.all(witnesses.map(async (currentWitness, witnessIndex) => {
+        try {
+          const response = await fetch("/api/debate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              witness: currentWitness,
+              userMessage: text,
+              history: messages.slice(-6),
+              caseFile,
+              strategy: method,
+              round: Math.min(nextAsked, 3),
+            }),
+          })
+          const data = await response.json() as DebateData & { detail?: string; error?: string }
+          if (!response.ok) throw new Error(data.detail || data.error || "对质暂时失败")
+          return { witness: currentWitness, witnessIndex, data }
+        } catch (reason: unknown) {
+          return {
+            witness: currentWitness,
+            witnessIndex,
+            error: reason instanceof Error ? reason.message : "回应失败",
+          }
+        }
+      }))
 
-      const takeaway = data.takeaway || "这条经历只能作为局部证据，仍需结合你的限制条件判断。"
-      setMessages((previous) => [
-        ...previous,
-        { role: "witness", text: data.reply, who: currentWitness.name, witnessIndex },
-        { role: "guide", text: takeaway, note: true },
-      ])
-      const nextAsked = asked + 1
-      setAsked(nextAsked)
-      setInsights((previous) => [...previous, { text: takeaway, witness: currentWitness.name, round: nextAsked }])
-      setActiveWitness(nextAsked % witnesses.length)
-      if (data.warning) setWarning(data.warning)
+      const noCoverage = (reply: string) =>
+        /证词(未覆盖|中?没有|里?没有|不涉及)|没有相关经历|未覆盖这个问题/.test(reply.slice(0, 40)) ||
+        (reply.length <= 60 && /(没有|无法|未)(回答|覆盖|涉及|提供|找到)|经历里没有|证词中?(没有|未)|不知道/.test(reply))
+      const suitable = results.filter((result) => {
+        const reply = result.data?.reply?.trim() || ""
+        if (!reply || result.data?.coverage === "none" || noCoverage(reply)) return false
+        return !/^(这一点我的经历里没有答案|没有答案|无法回答|不知道)[。！\s]*$/.test(reply)
+      }).sort((a, b) => {
+        if (a.data?.coverage === b.data?.coverage) return a.witnessIndex - b.witnessIndex
+        return a.data?.coverage === "direct" ? -1 : 1
+      })
+      const failed = results.filter((result) => result.error).length
+      const additions: Message[] = []
+      const newInsights: Insight[] = []
+
+      suitable.forEach((result) => {
+        const data = result.data as DebateData
+        const takeaway = data.takeaway || "这条经历只能作为局部证据，仍需结合你的限制条件判断。"
+        additions.push(
+          {
+            role: "witness",
+            text: data.reply || "",
+            who: result.witness.name,
+            witnessIndex: result.witnessIndex,
+            coverage: data.coverage === "direct" ? "direct" : "partial",
+          },
+          { role: "guide", text: `${result.witness.name}：${takeaway}`, note: true },
+        )
+        newInsights.push({ text: takeaway, witness: result.witness.name, round: nextAsked })
+      })
+
+      if (suitable.length) {
+        const notCovered = Math.max(0, witnesses.length - suitable.length - failed)
+        additions.push({
+          role: "guide",
+          text: `本轮已同题核对 ${witnesses.length} 位证人，采纳 ${suitable.length} 份相关回应${notCovered > 0 ? `，${notCovered} 位证人的经历未覆盖此问题` : ""}${failed > 0 ? `，${failed} 位回应失败` : ""}。只有入卷证据会参与最终裁决。`,
+        })
+        setMessages((previous) => [...previous, ...additions])
+        setInsights((previous) => [...previous, ...newInsights])
+        setAsked(nextAsked)
+        const modelWarning = results.map((result) => result.data?.warning).filter(Boolean)[0]
+        if (modelWarning) setWarning(modelWarning)
+      } else {
+        const notice = failed === witnesses.length
+          ? "本轮证人回应均失败，问题没有计入回合。请稍后原样重试。"
+          : `${witnesses.length} 位证人的经历都没有覆盖这个问题，因此没有强行生成回答，本轮也不计入回合。可以换成更贴近证词经历的问题。`
+        setMessages((previous) => [...previous, { role: "guide", text: notice }])
+        if (failed) setError("部分或全部证人回应失败，可以原样重试；已成功回应仍会被保留。")
+      }
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "对质失败，请重试")
       setMessages((previous) => [...previous, { role: "guide", text: "这次发问没有入卷，可以原样重试，或先换一个问题。" }])
@@ -206,7 +265,7 @@ export default function JuryPage() {
 
   const handleObjection = () => {
     setStrategy("适用性异议")
-    setInput("我认为这段经历不适用于我，因为我的情况是 ")
+    setInput("我认为这些经历未必适用于我，因为我的情况是 ")
   }
 
   const handleVerdict = async () => {
@@ -234,8 +293,8 @@ export default function JuryPage() {
   const guideText = asked >= 3
     ? "三回合已经完成。现在不该继续堆信息，该把证据变成行动阈值了。"
     : asked > 0
-      ? `第 ${asked} 条笔记已入卷。下一回合，试着换一种质询策略。`
-      : "先选一位证人，再选一种问法。我会把每轮回答整理成能用于裁决的笔记。"
+      ? `已完成 ${asked} 回合，采纳 ${insights.length} 条证据。下一回合，试着换一种质询策略。`
+      : "每个问题都会询问全部证人。我会只保留相关回应，并整理成能用于裁决的笔记。"
 
   return (
     <main className="jury-shell">
@@ -262,7 +321,7 @@ export default function JuryPage() {
       ) : (
         <div className="jury-layout">
           <aside className="witness-panel">
-            <div className="panel-heading"><span>WITNESSES</span><h2>证人席</h2><p>点击换人，不自动跳过问题</p></div>
+            <div className="panel-heading"><span>WITNESSES</span><h2>证人席</h2><p>同题询问全部证人，点击仅查看证词</p></div>
             <div className="witness-list">
               {witnesses.map((witness, index) => (
                 <div
@@ -287,8 +346,8 @@ export default function JuryPage() {
 
           <section className="hearing-panel">
             <div className="hearing-panel-head">
-              <div><span>ROUND {currentRound} / 3</span><h2>{witnesses[activeWitness]?.name} · {witnesses[activeWitness]?.role || "经历核对"}</h2></div>
-              <button type="button" onClick={handleObjection} disabled={isTyping}>这段不适用我</button>
+              <div><span>ROUND {currentRound} / 3</span><h2>同题交叉质询 · {witnesses.length} 位证人</h2></div>
+              <button type="button" onClick={handleObjection} disabled={isTyping}>质疑适用性</button>
             </div>
 
             <div className="chat-stream">
@@ -296,7 +355,7 @@ export default function JuryPage() {
                 <div key={index} className={`message-row ${message.role} ${message.note ? "note" : ""}`}>
                   {message.role === "guide" && <div className="guide-avatar">{message.note ? "笔" : "刘"}</div>}
                   <div className="message-bubble">
-                    {message.role === "witness" && <span className="message-who">{message.who} · 证词回应</span>}
+                    {message.role === "witness" && <span className="message-who">{message.who} · {message.coverage === "direct" ? "直接相关" : "部分相关"}</span>}
                     {message.role === "guide" && <span className="message-who">{message.note ? "刘看山的看山笔记" : "刘看山 · 主持"}</span>}
                     <p>{message.text}</p>
                     {message.role === "witness" && message.witnessIndex !== undefined && witnesses[message.witnessIndex]?.sourceUrl && !witnesses[message.witnessIndex]?.isDemo && (
@@ -306,20 +365,20 @@ export default function JuryPage() {
                 </div>
               ))}
               {isTyping && (
-                <div className="message-row witness"><div className="message-bubble typing"><span className="message-who">{witnesses[questioningWitness]?.name} 正在核对证词</span><div><i /><i /><i /></div></div></div>
+                <div className="message-row witness"><div className="message-bubble typing"><span className="message-who">刘看山正在收集 {witnesses.length} 位证人的回应</span><div><i /><i /><i /></div></div></div>
               )}
               <div ref={chatEnd} />
             </div>
 
             <div className="question-workbench">
-              <div className="guide-questions"><span>刘看山推荐这样问</span><div>{hints.map((hint, index) => <button type="button" key={hint} disabled={isTyping} onClick={() => { setStrategy(STRATEGIES[index]); void sendQuestion(hint, STRATEGIES[index]) }}>{hint}</button>)}</div></div>
+              <div className="guide-questions"><span>刘看山推荐这样问（将询问全部证人）</span><div>{hints.map((hint, index) => <button type="button" key={hint} disabled={isTyping} onClick={() => { setStrategy(STRATEGIES[index]); void sendQuestion(hint, STRATEGIES[index]) }}>{hint}</button>)}</div></div>
               <div className="strategy-tabs">{STRATEGIES.map((item) => <button type="button" key={item} className={strategy === item ? "active" : ""} onClick={() => setStrategy(item)}>{item}</button>)}</div>
               <div className="question-input">
                 <input
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
                   onKeyDown={(event) => { if (event.key === "Enter") void sendQuestion(input) }}
-                  placeholder={`以「${strategy}」向 ${witnesses[activeWitness]?.name || "证人"} 发问……`}
+                  placeholder={`以「${strategy}」向全部 ${witnesses.length} 位证人发问……`}
                   disabled={isTyping || isGenerating}
                 />
                 <button type="button" onClick={() => void sendQuestion(input)} disabled={!input.trim() || isTyping || isGenerating}>发问</button>

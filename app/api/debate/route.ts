@@ -25,6 +25,35 @@ function toText(value: unknown): string {
   return ""
 }
 
+function parseJsonObject(rawContent: string): Record<string, unknown> {
+  const cleaned = rawContent.replace(/```json|```/gi, "").trim()
+  const start = cleaned.indexOf("{")
+  if (start < 0) throw new Error("No JSON object")
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let index = start; index < cleaned.length; index += 1) {
+    const char = cleaned[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') { inString = true; continue }
+    if (char === "{") depth += 1
+    if (char === "}") {
+      depth -= 1
+      if (depth === 0) {
+        const objectText = cleaned.slice(start, index + 1).replace(/,\s*([}\]])/g, "$1")
+        return JSON.parse(objectText) as Record<string, unknown>
+      }
+      if (depth < 0) throw new Error("Unexpected closing brace")
+    }
+  }
+  throw new Error("Incomplete JSON object")
+}
+
 function fallbackAnswer(witness: Witness, userMessage: string, warning?: string): DebateResult {
   const evidence = (witness.content || witness.quote || "暂无可用证词").slice(0, 240)
   return {
@@ -54,20 +83,26 @@ export async function POST(req: Request) {
     const systemPrompt = `你是决策陪审团中的一名证人，正在帮助用户审清一个真实决定。
 你的职责不是机械地说“不知道”，也不是替用户做决定，而是把证词变成有用的证据。
 
+必须先做相关性判定，再写回答：
+- 第一步：在证词里找一句能直接支撑本问题回答的原文。找不到，就把 coverage 设为 "none"，evidenceQuote 留空，reply 只写一句“证词未覆盖这个问题”，不给任何启发、建议或行动步骤。
+- 第二步：找到了，把这句原文逐字写进 evidenceQuote，再基于它回答。
+
 必须遵守：
 1. 【经历事实】只能来自给定证词，不得补充数字、人物、事件或心理活动。
 2. 【对本案的启发】允许进行谨慎推理，但必须使用“如果……那么……”或“这可能意味着……”明确标记为推理。
 3. 用户问的是应用方法时，可以基于证词给出低成本核对思路，不得假装这是原作者说过的话。
 4. 不要把用户提供的决定、理由或底线误写成证人的亲身经历。
-5. 如果本轮策略是“行动追问”，必须给出包含对象、数量、期限和观察指标的一步动作；禁止只说“做市场调研”“收集数据”“找用户聊聊”而不给执行规格。
-6. 若证词与问题无关，指出缺少哪类信息，同时给一个能继续审下去的追问，不要只回答“不知道”。
-7. 回应控制在 240 字以内，语气温和、直接，不端着，不喊口号。
+5. 仅当 coverage 不为 none 且本轮策略是“行动追问”时，才给出包含对象、数量、期限和观察指标的一步动作；禁止只说“做市场调研”“收集数据”“找用户聊聊”而不给执行规格。
+6. reply 的“证词能确认”部分必须写出 evidenceQuote 的原文，不能留空或只写标题。
+7. coverage 为 none 时，禁止输出任何行动、数量或执行规格。
+8. 回应控制在 240 字以内，语气温和、直接，不端着，不喊口号。
 
 只输出 JSON，不要使用 markdown：
 {
-  "reply": "给用户的完整回应，可用换行分为“证词能确认”和“对你的启发”两部分",
-  "takeaway": "刘看山可记入案卷的一句话，说明这条回应改变了什么判断，50 字以内",
-  "coverage": "direct（证词直接覆盖）/ partial（只能部分启发）/ none（基本无关）"
+  "coverage": "direct（证词直接覆盖）/ partial（只能部分启发）/ none（证词中找不到能回答该问题的经历事实）",
+  "evidenceQuote": "逐字引用证词中支撑本回答的原句；none 时留空字符串",
+  "reply": "给用户的完整回应，可用换行分为“证词能确认”和“对你的启发”两部分；none 时只写一句缺失说明",
+  "takeaway": "刘看山可记入案卷的一句话，说明这条回应改变了什么判断，50 字以内；none 时留空字符串"
 }`
 
     const userPrompt = `【本案决定】${caseFile.decision || "未提供"}
@@ -107,8 +142,19 @@ export async function POST(req: Request) {
     const data = await response.json()
     const raw = String(data.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim()
     try {
-      const parsed = JSON.parse(raw)
+      const parsed = parseJsonObject(raw)
+      const coverage = ["direct", "partial", "none"].includes(String(parsed.coverage)) ? String(parsed.coverage) : "partial"
       let reply = toText(parsed.reply) || raw
+      // 模型偶会空着「证词能确认」段却硬凑一段通用建议，这种情况按未覆盖处理，不强行入卷
+      const emptyConfirmation = /证词能确认[：:]?\s*(?:对你的启发|【执行规格】|$)/m.test(reply)
+      const selfReportedNone = /证词(未覆盖|中?没有|里?没有|不涉及)|没有相关经历|找不到能回答|未覆盖这个问题/.test(reply.slice(0, 40))
+      if (coverage === "none" || emptyConfirmation || selfReportedNone) {
+        return Response.json({
+          reply: "证词中找不到能回答这个问题的具体经历，本席不就此问题作证，也不强行给出建议。",
+          takeaway: "",
+          coverage: "none",
+        })
+      }
       const largeSample = reply.match(/(\d{2,})\s*(位|名|个|人)/)
       if (strategy === "行动追问" && largeSample && Number(largeSample[1]) > 20) {
         reply = reply.replace(largeSample[0], `5-10 ${largeSample[2]}`)
@@ -120,13 +166,14 @@ export async function POST(req: Request) {
       return Response.json({
         reply,
         takeaway: toText(parsed.takeaway) || "这段经历提供了一个待验证的判断，仍需核对它是否适用于你。",
-        coverage: ["direct", "partial", "none"].includes(parsed.coverage) ? parsed.coverage : "partial",
+        coverage,
       })
     } catch {
       return Response.json({
-        reply: raw || fallbackAnswer(witness, userMessage).reply,
-        takeaway: "证人提供了一条新线索；请把它当作待验证证据，而不是最终决定。",
-        coverage: "partial",
+        reply: raw || "本次回应未能整理成有效证词，无法确认与本问题的相关性。",
+        takeaway: "",
+        coverage: "none",
+        warning: "有 1 位证人的回应未能整理，已按未覆盖处理，不计入案卷。",
       })
     }
   } catch {
