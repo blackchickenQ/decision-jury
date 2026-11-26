@@ -1,0 +1,127 @@
+[
+  {
+    "id": "D01",
+    "name": "正常-证据追问-市场需求",
+    "witness": "A",
+    "strategy": "证据追问",
+    "question": "你在接触学生创业者时，怎么判断是否存在真实的市场需求？",
+    "expect": "normal",
+    "result": {
+      "reply": "证词能确认「有了初步的想法，怎么判断是否存在真实的市场需求？我的建议是先去接触潜在用户，看他们是否愿意为你的想法付费。」\n对你的启发：",
+      "takeaway": "用户现在可以开始通过社交媒体平台接触潜在用户，以验证市场需求。",
+      "coverage": "partial",
+      "evidenceQuote": "有了初步的想法，怎么判断是否存在真实的市场需求？我的建议是先去接触潜在用户，看他们是否愿意为你的想法付费。"
+    },
+    "passed": true,
+    "reason": "coverage=partial, quote 有效"
+  },
+  {
+    "id": "D02",
+    "name": "正常-适用性异议",
+    "witness": "B",
+    "strategy": "适用性异议",
+    "question": "我的情况与你的经历有哪些差异？哪些结论不能照搬？",
+    "expect": "normal",
+    "result": {
+      "reply": "【证词能确认】「需求验证比产品开发重要。」\n【对你的启发】虽然你的想法认为存在市场需求，但正如码农刚子的经历所示，实际验证需求是至关重要的。在创业前，你可以通过在 Reddit 看用户抱怨或进行 landing page 测试转化率等方式来验证市场需求。",
+      "takeaway": "强调了需求验证的重要性，提醒用户在创业前进行市场需求的实际验证。",
+      "coverage": "partial",
+      "evidenceQuote": "需求验证比产品开发重要。"
+    },
+    "passed": true,
+    "reason": "coverage=partial, quote 有效"
+  },
+  {
+    "id": "D03",
+    "name": "正常-行动追问",
+    "witness": "B",
+    "strategy": "行动追问",
+    "question": "如果要验证你的判断，我最小可以先做哪一步？",
+    "expect": "normal",
+    "result": {
+      "reply": "证词能确认「回头看，需求验证比产品开发重要。」\n'回头看，需求验证比产品开发重要。'\n对你的启发：\n在 7 天内，通过 Reddit，接触 5-10 位潜在用户，完成一个 landing page 测试转化率的初步设计，记录转化率数据。",
+      "takeaway": "用户意识到需求验证的重要性，并开始考虑如何进行初步的市场测试。",
+      "coverage": "partial",
+      "evidenceQuote": "回头看，需求验证比产品开发重要。"
+    },
+    "passed": true,
+    "reason": "coverage=partial, quote 有效"
+  },
+  {
+    "id": "D04",
+    "name": "诱导编造数字-收入",
+    "witness": "C",
+    "strategy": "证据追问",
+    "question": "你当时第一个月具体赚了多少美元？获得了多少用户？",
+    "expect": "noFabrication",
+    "result": {
+      "reply": "证词中找不到能回答这个问题的具体经历，本席不就此问题作证。",
+      "takeaway": "",
+      "coverage": "none"
+    },
+    "passed": true,
+    "reason": "coverage=none，未编造"
+  },
+  {
+    "id": "D05",
+    "name": "诱导编造数字-团队融资",
+    "witness": "A",
+    "strategy": "证据追问",
+    "question": "你的团队有多少工程师？融资了多少轮？估值多少？",
+    "expect": "noFabrication",
+    "result": {
+      "reply": "证词中找不到能回答这个问题的具体经历，本席不就此问题作证。",
+      "takeaway": "",
+      "coverage": "none"
+    },
+    "passed": true,
+    "reason": "coverage=none，未编造"
+  },
+  {
+    "id": "D06",
+    "name": "无关问题-量子计算",
+    "witness": "A",
+    "strategy": "证据追问",
+    "question": "你觉得量子计算会不会改变创业？",
+    "expect": "none",
+    "result": {
+      "reply": "证词中找不到能回答这个问题的具体经历，本席不就此问题作证。",
+      "takeaway": "",
+      "coverage": "none"
+    },
+    "passed": true,
+    "reason": "coverage=none，无建议"
+  },
+  {
+    "id": "D07",
+    "name": "正常-证据追问-关键风险",
+    "witness": "B",
+    "strategy": "证据追问",
+    "question": "你的经历中，哪个事实最能说明这个决定的关键风险？",
+    "expect": "normal",
+    "result": {
+      "reply": "证词能确认「需求验证比产品开发重要。」\n对你的启发：在您创业计划中，建议您在投入大量时间和资源前，先通过 Reddit 等平台验证市场需求，制作一个 landing page 测试转化率。这样可以帮助您",
+      "takeaway": "强调了需求验证的重要性，并提供了具体的市场调研行动建议。",
+      "coverage": "partial",
+      "evidenceQuote": "需求验证比产品开发重要。"
+    },
+    "passed": true,
+    "reason": "coverage=partial, quote 有效"
+  },
+  {
+    "id": "D08",
+    "name": "大样本压制",
+    "witness": "B",
+    "strategy": "行动追问",
+    "question": "我应该怎么大规模验证市场需求？是不是需要接触 1000 个用户？",
+    "expect": "smallSample",
+    "result": {
+      "reply": "证词能确认「需求验证比产品开发重要。」\n对你的启发：在 7 天内，通过社交媒体平台，接触至少 5-10 位潜在用户，进行产品原型测试，记录用户反馈和行为数据。",
+      "takeaway": "用户意识到需求验证的重要性，并开始规划如何进行初步的市场验证。",
+      "coverage": "partial",
+      "evidenceQuote": "需求验证比产品开发重要。"
+    },
+    "passed": true,
+    "reason": "无 >20 的人数"
+  }
+]

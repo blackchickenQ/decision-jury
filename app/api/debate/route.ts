@@ -12,6 +12,7 @@ type DebateResult = {
   reply: string
   takeaway: string
   coverage: "direct" | "partial" | "none"
+  evidenceQuote?: string
   warning?: string
 }
 
@@ -64,6 +65,52 @@ function fallbackAnswer(witness: Witness, userMessage: string, warning?: string)
   }
 }
 
+// 未覆盖的统一文案：措辞不含“建议/应该/可以”等字眼，避免被误读成仍在给行动建议
+const NO_COVERAGE_REPLY = "证词中找不到能回答这个问题的具体经历，本席不就此问题作证。"
+
+// 独立的相关性审查：实测让“负责生成完整回答”的模型顺带自报 relevance 分数并不可靠，
+// 它对证词完全无关的“量子计算”也一律打 2 分并凑一句原文当引用。
+// 因此拆出一次专门判定，与正式生成并发执行，延迟几乎不变。
+// 返回 false = 证词完全不涉及问题主题，应判未覆盖；null = 审查不可用，放行给后续防线。
+async function judgeRelevance(witness: Witness, userMessage: string): Promise<boolean | null> {
+  try {
+    const judgeSystem = `你是「决策陪审团」的相关性审查员。只做一件事：判断给定证词能否就用户的问题作证。
+
+输出 false（无关）的唯一情形：问题引入了证词完全没涉及的新领域或新概念（例：证词只讲校园创业，问题却问量子计算、考研备考、天体物理），证词里没有任何一句经历事实能支撑回答。
+
+其余一律输出 true，尤其包括这些围绕证词本身展开的问法：问经历中的关键风险、问「我的情况与你的经历有哪些差异」、问最小验证的第一步、问怎么判断市场需求、追问具体数字（证词没写数字也不算无关，交给后续证据校验处理）。
+
+只输出 JSON，不要 markdown：
+{"covered": true 或 false, "reason": "证词中最贴近问题的一句逐字原文；若无关则写「证词未涉及该主题」"}`
+    const response = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.ZHIPU_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "glm-4-flash",
+        messages: [
+          { role: "system", content: judgeSystem },
+          { role: "user", content: `【完整证词】${witness.content || witness.quote}\n【用户问题】${userMessage}` },
+        ],
+        temperature: 0,
+        max_tokens: 160,
+        response_format: { type: "json_object" },
+      }),
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const parsed = parseJsonObject(String(data.choices?.[0]?.message?.content || ""))
+    if (parsed.covered === false || parsed.covered === "false") return false
+    if (parsed.covered === true || parsed.covered === "true") return true
+    return null
+  } catch {
+    return null
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -84,8 +131,9 @@ export async function POST(req: Request) {
 你的职责不是机械地说“不知道”，也不是替用户做决定，而是把证词变成有用的证据。
 
 必须先做相关性判定，再写回答：
-- 第一步：在证词里找一句能直接支撑本问题回答的原文。找不到，就把 coverage 设为 "none"，evidenceQuote 留空，reply 只写一句“证词未覆盖这个问题”，不给任何启发、建议或行动步骤。
-- 第二步：找到了，把这句原文逐字写进 evidenceQuote，再基于它回答。
+- 第一步：先给 relevance 打分（0=证词完全没提到这个问题的核心概念；1=勉强沾边；2=部分相关；3=直接覆盖）。
+- 第二步：在证词里找一句能直接支撑本问题回答的原文。找不到，就把 coverage 设为 "none"，evidenceQuote 留空，reply 只写一句“证词未覆盖这个问题”，不给任何启发、建议或行动步骤。
+- 第三步：找到了，把这句原文逐字写进 evidenceQuote，再基于它回答。relevance 为 0 时，coverage 必须为 "none"，reply 只写一句缺失说明，禁止任何启发、建议或行动。
 
 必须遵守：
 1. 【经历事实】只能来自给定证词，不得补充数字、人物、事件或心理活动。
@@ -99,6 +147,7 @@ export async function POST(req: Request) {
 
 只输出 JSON，不要使用 markdown：
 {
+  "relevance": "0-3 的整数：0=证词完全没提到这个问题的核心概念；1=勉强沾边；2=部分相关；3=直接覆盖",
   "coverage": "direct（证词直接覆盖）/ partial（只能部分启发）/ none（证词中找不到能回答该问题的经历事实）",
   "evidenceQuote": "逐字引用证词中支撑本回答的原句；none 时留空字符串",
   "reply": "给用户的完整回应，可用换行分为“证词能确认”和“对你的启发”两部分；none 时只写一句缺失说明",
@@ -117,6 +166,8 @@ export async function POST(req: Request) {
 【用户本轮问题】${userMessage}
 【行动追问的额外输出要求】如果本轮策略是行动追问，reply 必须包含“在 7 天内，通过哪个渠道，接触多少位什么对象，完成什么动作，记录哪一项行为指标”。不要只列调研、制作、分析等抽象步骤。`
 
+    // 相关性审查与正式生成并发发起，避免串行增加等待
+    const relevancePromise = judgeRelevance(witness, userMessage)
     const response = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
       method: "POST",
       headers: {
@@ -140,24 +191,56 @@ export async function POST(req: Request) {
     }
 
     const data = await response.json()
+    // ===== P0-2：独立相关性审查判定无关，直接判未覆盖，不给模型凑答案的机会 =====
+    const covered = await relevancePromise
+    if (covered === false) {
+      return Response.json({ reply: NO_COVERAGE_REPLY, takeaway: "", coverage: "none" })
+    }
     const raw = String(data.choices?.[0]?.message?.content || "").replace(/```json|```/g, "").trim()
     try {
       const parsed = parseJsonObject(raw)
       const coverage = ["direct", "partial", "none"].includes(String(parsed.coverage)) ? String(parsed.coverage) : "partial"
+      // 模型自报 0 分也直接判未覆盖（保留方案原有的第一道防线）
+      const relevance = Number(parsed.relevance)
+      if (Number.isFinite(relevance) && relevance === 0) {
+        return Response.json({ reply: NO_COVERAGE_REPLY, takeaway: "", coverage: "none" })
+      }
       let reply = toText(parsed.reply) || raw
+      // ===== P0-1：证据引用校验，禁止伪装引用 =====
+      const quoteRaw = toText(parsed.evidenceQuote).trim()
+      const sourceRaw = toText(witness.content || witness.quote)
+      // 归一化：去掉空白和中英文标点，避免因格式差异误判
+      const normalize = (s: string) => s.replace(/[\s，。！？；：、""''（）()【】\[\]—\-…·,.!?;:]/g, "")
+      const quoteNorm = normalize(quoteRaw)
+      const sourceNorm = normalize(sourceRaw)
+      if (coverage !== "none") {
+        const quoteValid = quoteNorm.length >= 8 && sourceNorm.length > 0 && sourceNorm.includes(quoteNorm)
+        if (!quoteValid) {
+          return Response.json({
+            reply: "证词中找不到能逐字支撑这个回答的原文，本席不就此问题作证。",
+            takeaway: "",
+            coverage: "none",
+            warning: "这位证人的证词缺少可逐字引用的原文，本轮未纳入案卷。",
+          })
+        }
+        // 把逐字原文强制写进 reply 的「证词能确认」段，前端展示的就是可核对的原文
+        reply = reply.replace(/^(【?证词能确认】?)[：:]?[^\n]*/m, `$1「${quoteRaw}」`)
+      }
       // 模型偶会空着「证词能确认」段却硬凑一段通用建议，这种情况按未覆盖处理，不强行入卷
       const emptyConfirmation = /证词能确认[：:]?\s*(?:对你的启发|【执行规格】|$)/m.test(reply)
       const selfReportedNone = /证词(未覆盖|中?没有|里?没有|不涉及)|没有相关经历|找不到能回答|未覆盖这个问题/.test(reply.slice(0, 40))
       if (coverage === "none" || emptyConfirmation || selfReportedNone) {
-        return Response.json({
-          reply: "证词中找不到能回答这个问题的具体经历，本席不就此问题作证，也不强行给出建议。",
-          takeaway: "",
-          coverage: "none",
-        })
+        return Response.json({ reply: NO_COVERAGE_REPLY, takeaway: "", coverage: "none" })
       }
-      const largeSample = reply.match(/(\d{2,})\s*(位|名|个|人)/)
-      if (strategy === "行动追问" && largeSample && Number(largeSample[1]) > 20) {
-        reply = reply.replace(largeSample[0], `5-10 ${largeSample[2]}`)
+      // ===== P1-2：非行动追问策略不应给执行规格 =====
+      if (strategy !== "行动追问") {
+        reply = reply.replace(/在\s*\d+\s*天内[^\n。]*?(?:记录|指标)[^\n。]*[。]?/g, "")
+      }
+      // ===== P1-1：大样本压制处理所有匹配 =====
+      if (strategy === "行动追问") {
+        reply = reply.replace(/(\d{2,})\s*(位|名|个|人)/g, (match, num, unit) =>
+          Number(num) > 20 ? `5-10 ${unit}` : match
+        )
       }
       const hasExecutionSpec = /\d+\s*(天|位|名|个|次|页|条|元|%|小时|周)/.test(reply)
       if (strategy === "行动追问" && !hasExecutionSpec) {
@@ -167,6 +250,7 @@ export async function POST(req: Request) {
         reply,
         takeaway: toText(parsed.takeaway) || "这段经历提供了一个待验证的判断，仍需核对它是否适用于你。",
         coverage,
+        evidenceQuote: quoteRaw,
       })
     } catch {
       return Response.json({

@@ -37,6 +37,7 @@ type DebateData = {
   reply?: string
   takeaway?: string
   coverage?: "direct" | "partial" | "none"
+  evidenceQuote?: string
   warning?: string
 }
 type WitnessResult = {
