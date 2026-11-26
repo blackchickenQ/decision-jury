@@ -1,36 +1,114 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 决策陪审团 · Decision Jury
 
-## Getting Started
+> 知乎黑客松 S3 · 湾区共创季 · 参赛项目
+> **把走过同样路的人，请上证人席。**
 
-First, run the development server:
+## 一、一句话说明
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+用户面对高风险决定时，我们不替他预测未来，也不给通用建议——而是从知乎真实回答里「传唤」三位经历过的人，让他当面对质、被质疑，最后得到一张带原文链接的 7 天行动裁决书。
+
+## 二、场景价值
+
+| 痛点 | 我们的解法 |
+|---|---|
+| 知乎最值钱的一手经验散落在回答和评论区，用户不知道搜什么、信谁 | 按你的具体决定检索真实经历，抽成三位证人 |
+| 3000 字长帖回答不了「那我现在该怎么办」，通用 AI 又不痛不痒 | 把经验压成证词，用对质逼出具体条件与代价 |
+| 用户缺的不是更多信息，而是**被有经验的人当面质疑**的机会 | 证人只能基于自己那条原回答作证，可逐字溯源 |
+
+**首发场景**：休学创业 / 出海 AI 工具（高风险个人决策）。玩法可平移到考研择校、技术选型、二选一。
+
+## 三、创新点
+
+- **全新交互形态**：不是又一代聊，而是同题并行质询三位证人 + 行动裁决——有角色、有规则、有结局的庭审叙事。
+- **防编造机制**：逐字引用校验（`evidenceQuote` 必须是原文子串）+ 独立相关性审查（`judgeRelevance`），证词没有的信息就明说没有，不硬凑、不换人。
+- **看山笔记闭环**：每轮对质产出 `takeaway`，只有入卷的笔记参与最终裁决，过程可追溯。
+- **刘看山 IP**：作为法庭引导员贯穿开场、控场、宣读，是流程角色不是贴皮 logo。
+
+## 四、玩法（三种模式，均已实现）
+
+| 模式 | 说明 | 裁决形态 |
+|---|---|---|
+| `single` 单案对质 | 一个决定，三位证人同题作答 | 有条件通过 / 驳回 + 7 天实验 |
+| `compare` 二选一 | A / B 两案，用同一把尺子比较 | 先同尺比较再选 |
+| `premortem` 事前验尸 | 假设已失败，倒推死因 | 先排首要死因再决定 |
+
+## 五、核心流程
+
+```
+立案（选模式 / 写决定·理由·底线）
+  → 传唤证人（知乎检索，3 席，失败则明确标注演示角色）
+  → 3 回合对质（每问一次，三位证人并行作答，未覆盖者不作证）
+  → 出具裁决（死因 + 7 天最小实验 + 成功阈值 + 停止条件 + 复盘日期）
+  → 裁决书（复制 / 打印，每句可点回原文）
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 六、技术栈
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- **框架**：Next.js 16 App Router + TypeScript
+- **模型**：智谱 `glm-4-flash`（相关性审查 temp=0 独立并发，正式生成 temp=0.35）
+- **上游**：知乎开发者检索 API
+- **状态**：`localStorage` 传递案卷，无鉴权、无数据库
+- **降级**：缺密钥不崩溃——检索出演示证人、AI 出结构化保底内容并带 `warning`，保证无密钥环境也能演示
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 七、快速开始
 
-## Learn More
+```bash
+cd decision-jury
+npm install
+npm run dev                    # http://localhost:3000
+# 本机 Turbopack 有权限问题时：npx next dev --webpack
 
-To learn more about Next.js, take a look at the following resources:
+# 生产模式
+npx next build --webpack
+npx next start
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+环境变量（项目根 `.env.local`，不入库）：
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| 变量 | 用途 |
+|---|---|
+| `ZHIHU_ACCESS_SECRET` | 知乎检索 Bearer Token |
+| `ZHIPU_API_KEY` | 智谱大模型 |
 
-## Deploy on Vercel
+评测（两套脚本，用途不同，不要混用）：
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- `python tests/run-eval-antifab.py` → 防编造断言 D01–D08，期望 **8/8 通过**（逐字引用有效性、诱导编造拦截、无关问题判 none、大样本压制），与 P0 修复配套，结果写入 `tests/raw-results-antifab.json`。
+- `python tests/run-eval.py` → 3 号的端到端真实模型质量验证（12 条，人工打分用），依赖同目录 `tests/search.json`（已入库），结果写入 `tests/raw-results.json`。
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 八、项目结构
+
+```
+app/page.tsx             立案页
+app/jury/page.tsx        对质室（传唤 + 3 回合并行对质）
+app/verdict/page.tsx     裁决书
+app/api/search/route.ts  知乎检索 + 演示角色兜底
+app/api/debate/route.ts  单证人作答 + 独立审查 + 证据校验
+app/api/verdict/route.ts 行动裁决 + 三套玩法模板 + 质量收敛
+app/liu-kanshan.tsx      刘看山引导员
+tests/                   防编造评测用例与脚本
+docs/产品设计-最终对齐版.md  产品流程、证人机制、裁决标准（以此版为准）
+```
+
+## 九、团队分工
+
+| 编号 | 角色 | 核心任务 |
+|---|---|---|
+| 1 | 主开发 | 网站代码、AI 功能、知乎检索接入、部署 |
+| 2 | 产品经理 | 产品流程、功能规则、三位证人机制、裁决标准、计划书 |
+| 3 | AI 效果研究 | 测试用例、回答质量验证、评测报告 |
+| 4 | UI 设计 | 页面风格、布局、交互、公网 Demo 部署 |
+| 5 | 测试与路演 | 完整流程测试、Bug 整理、演示视频与 PPT |
+
+## 十、演示材料
+
+- **公网 Demo**：`_（部署完成后填入链接）_`
+- **演示视频**：`_（录制完成后填入链接）_`
+- **真实试用反馈**：`_（3–5 名同学试用后补入）_`
+
+> 以上三项为提交佐证材料，链接待补齐。产品本身在本地与无密钥环境下均可完整跑通。
+
+## 十一、文档索引
+
+- `docs/产品设计-最终对齐版.md` —— 产品流程、功能规则、三位证人机制、裁决标准（**以此版为准**；`docs/产品设计.md` 为旧版废弃页）
+- `API.md` —— 接口契约（字段、判定链、错误约定、评测）
+- `docs/玩法建议核实-对照代码.md` —— 玩法建议与代码实况的逐条核对
