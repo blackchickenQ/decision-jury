@@ -344,11 +344,15 @@ curl -X POST http://localhost:3000/api/verdict \
 ```bash
 # 服务起着时另开终端
 cd decision-jury
-python tests/run-eval.py
-# 换端口： EVAL_BASE_URL=http://localhost:3001 python tests/run-eval.py
+python tests/run-eval-antifab.py
+# 换端口： EVAL_BASE_URL=http://localhost:3001 python tests/run-eval-antifab.py
 ```
 
-期望输出 **8/8 通过**，原始模型结果写入 `tests/raw-results.json`。覆盖：逐字引用有效性、诱导编造拦截、无关问题判 `none` 且无建议词、大样本压制。
+期望输出 **8/8 通过**，原始模型结果写入 `tests/raw-results-antifab.json`。覆盖：逐字引用有效性、诱导编造拦截、无关问题判 `none` 且无建议词、大样本压制。
+
+> `tests/` 下有两套**用途不同**的评测，不要混用：
+> - `run-eval-antifab.py` + `cases.json` → 本节的防编造断言（D01–D08，8/8），与 P0 修复配套；
+> - `run-eval.py` + `raw-results.json` → 3 号的端到端真实模型质量验证（12 条，人工打分用）。该脚本读取同目录 `search.json`，当前仓库尚未包含该文件，运行前需补齐。
 
 ### 三个最常见的坑
 
@@ -379,4 +383,5 @@ curl -sS -o /dev/null -w "verdict=%{http_code}\n" http://localhost:3000/verdict
 | `app/api/debate/route.ts` | 单证人作答 + 独立相关性审查 + 证据引用校验 |
 | `app/api/verdict/route.ts` | 行动裁决 + 三套玩法保底模板 + 质量收敛 |
 | `app/liu-kanshan.tsx` | 刘看山内联 SVG 形象（原创占位，非官方素材） |
-| `tests/cases.json` / `tests/run-eval.py` | 防编造评测用例与脚本 |
+| `tests/cases.json` / `tests/run-eval-antifab.py` | 防编造评测用例与脚本（D01–D08） |
+| `tests/run-eval.py` / `tests/raw-results.json` | 3 号端到端质量验证套件 |

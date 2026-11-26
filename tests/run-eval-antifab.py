@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 决策陪审团 · 对质接口防编造评测
-用法：先启动服务（npm run dev 或 npm run start），再执行 python tests/run-eval.py
-输出：tests/raw-results.json + 控制台报告
+用法：先启动服务（npm run dev 或 npm run start），再执行 python tests/run-eval-antifab.py
+输出：tests/raw-results-antifab.json + 控制台报告
 """
 import json
 import os
@@ -149,14 +149,14 @@ def main():
         time.sleep(1)  # 避免触发限流
 
     # 写入原始结果
-    with open(os.path.join(BASE_DIR, "raw-results.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(BASE_DIR, "raw-results-antifab.json"), "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
 
     print(f"\n{'='*60}\n总计: {passed}/{total} 通过")
     if passed == total:
         print("🎉 全部通过，防编造承诺已兑现")
     else:
-        print("⚠️ 存在未通过用例，详见 tests/raw-results.json")
+        print("⚠️ 存在未通过用例，详见 tests/raw-results-antifab.json")
         sys.exit(1)
 
 
