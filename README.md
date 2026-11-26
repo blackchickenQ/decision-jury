@@ -63,7 +63,7 @@ npx next build --webpack
 npx next start
 ```
 
-> 生产模式下改了代码必须重新 `build` 并重启 `start`，否则页面和接口仍是旧版本。日常调试用 `npm run dev` 即可。
+> 生产模式下改了代码必须重新 `build` 并重启 `start`，否则页面和接口仍是旧版本（旧构建缓存曾导致评测只有 3/8）。日常调试用 `npm run dev` 即可。
 
 环境变量（项目根 `.env.local`，不入库）：
 
@@ -72,21 +72,25 @@ npx next start
 | `ZHIHU_ACCESS_SECRET` | 知乎检索 Bearer Token |
 | `ZHIPU_API_KEY` | 智谱大模型 |
 
-评测（服务起着时另开终端）：`python tests/run-eval-antifab.py`，期望 **8/8 通过**，覆盖逐字引用有效性、诱导编造拦截、无关问题判 `none`、大样本压制。换端口用 `EVAL_BASE_URL=http://localhost:3001 python tests/run-eval-antifab.py`。
+评测（两套脚本，用途不同，不要混用）：
+
+- `python tests/run-eval-antifab.py` → 防编造断言 D01–D08，期望 **8/8 通过**（逐字引用有效性、诱导编造拦截、无关问题判 none、大样本压制），与 P0 修复配套，结果写入 `tests/raw-results-antifab.json`。
+- `python tests/run-eval.py` → 3 号的端到端真实模型质量验证（12 条，人工打分用），依赖同目录 `tests/search.json`（已入库），结果写入 `tests/raw-results.json`。
+
+> 服务不在 3000 端口时，用 `EVAL_BASE_URL=http://localhost:3001 python tests/run-eval-antifab.py` 指定地址。
 
 ## 八、项目结构
 
 ```
-app/page.tsx              立案页
-app/jury/page.tsx         对质室（传唤 + 3 回合并行对质）
-app/verdict/page.tsx      裁决书
-app/api/search/route.ts   知乎检索 + 演示角色兜底
-app/api/debate/route.ts   单证人作答 + 独立审查 + 证据校验
-app/api/verdict/route.ts  行动裁决 + 三套玩法模板 + 质量收敛
-app/liu-kanshan.tsx       刘看山引导员
-tests/run-eval-antifab.py 防编造评测（D01–D08，配 cases.json）
-docs/产品设计.md           产品流程、证人机制、裁决标准
-API.md                    接口契约
+app/page.tsx             立案页
+app/jury/page.tsx        对质室（传唤 + 3 回合并行对质）
+app/verdict/page.tsx     裁决书
+app/api/search/route.ts  知乎检索 + 演示角色兜底
+app/api/debate/route.ts  单证人作答 + 独立审查 + 证据校验
+app/api/verdict/route.ts 行动裁决 + 三套玩法模板 + 质量收敛
+app/liu-kanshan.tsx      刘看山引导员
+tests/                   防编造评测用例与脚本
+docs/产品设计-最终对齐版.md  产品流程、证人机制、裁决标准（以此版为准）
 ```
 
 ## 九、团队分工
@@ -109,6 +113,6 @@ API.md                    接口契约
 
 ## 十一、文档索引
 
-- `docs/产品设计.md` —— 产品流程、功能规则、三位证人机制、裁决标准（含接口对齐）
+- `docs/产品设计-最终对齐版.md` —— 产品流程、功能规则、三位证人机制、裁决标准（**以此版为准**；`docs/产品设计.md` 为旧版废弃页）
 - `API.md` —— 接口契约（字段、判定链、错误约定、评测）
-- 方案提案原件（HTML，未入库）—— 见提交材料
+- `docs/玩法建议核实-对照代码.md` —— 玩法建议与代码实况的逐条核对
